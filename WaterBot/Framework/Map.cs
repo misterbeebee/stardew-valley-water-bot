@@ -1,4 +1,4 @@
-﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework;
 using StardewValley;
 using StardewValley.TerrainFeatures;
 
@@ -785,8 +785,10 @@ namespace WaterBot.Framework
 
                         if (current.block)
                         {
-                            int score = 0;
-                            Tile bestOption = this.map[current.y][current.x];
+                            // Bug 2 fix: initialize to null/-1 so no blocked tile can
+                            // win by default (previously defaulted to the blocked tile itself).
+                            int score = -1;
+                            Tile? bestOption = null;
 
                             // If you can stand on adjacents, do it.
                             foreach (var direction in this.directions.Concat(this.diagonals))
@@ -808,6 +810,7 @@ namespace WaterBot.Framework
 
                                     if (neighborScore > score)
                                     {
+                                        score = neighborScore;
                                         bestOption = neighbor;
                                     }
                                 }
@@ -867,6 +870,13 @@ namespace WaterBot.Framework
                                 {
                                     actionable.pushExecuteOn(neighbor.getPoint());
                                     neighbor.watered = true;
+                                }
+                                // Bug 3 fix: push diagonal neighbors onto the DFS stack
+                                // so the traversal can reach tiles beyond them.
+                                // Previously only the cardinal-direction loop did this.
+                                if (!neighbor.visited && group.Contains(neighbor))
+                                {
+                                    stack.Add(neighbor);
                                 }
                             }
                         }

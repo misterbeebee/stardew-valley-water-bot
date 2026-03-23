@@ -1,4 +1,4 @@
-﻿using BotFramework;
+using BotFramework;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
@@ -30,6 +30,7 @@ namespace WaterBot
             // Set static reference to monitor for logging.
 
             helper.Events.Input.ButtonPressed += this.OnButtonPressed;
+            helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
             helper.Events.GameLoop.GameLaunched += (s, e) => SetUpConfigMenu();
         }
 
@@ -58,6 +59,15 @@ namespace WaterBot
                     this.bot?.start(this.console);
                 }
             }
+        }
+
+        /// <summary>
+        /// Raised once per game tick; drives the bot state machine on the main thread.
+        /// </summary>
+        private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
+        {
+            if (!Context.IsWorldReady) return;
+            this.bot?.onUpdateTick();
         }
 
         /// <summary>

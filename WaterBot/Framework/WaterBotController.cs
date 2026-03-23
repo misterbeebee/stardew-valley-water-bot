@@ -1,4 +1,4 @@
-﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewValley;
 using StardewValley.Tools;
@@ -21,6 +21,11 @@ namespace WaterBot.Framework
         private ActionableTile? refillStation;
         public console? console;
 
+        // State-machine fields for tick-based delay (Bug 1 fix)
+        private int waitUntilTick = 0;
+        private Character? pendingCharacter;
+        private GameLocation? pendingLocation;
+
         public WaterBotController(IModHelper helper)
         {
             this.helper = helper;
@@ -28,6 +33,19 @@ namespace WaterBot.Framework
             this.map = new Map();
             this.path = new List<Group>();
             this.order = new List<ActionableTile>();
+        }
+
+        /// <summary>
+        /// Called every game tick from the main thread. Drives watering delay state machine.
+        /// </summary>
+        public void onUpdateTick()
+        {
+            if (!this.active) return;
+            if (this.waitUntilTick > 0 && Game1.ticks >= this.waitUntilTick)
+            {
+                this.waitUntilTick = 0;
+                this.startWatering(this.pendingCharacter!, this.pendingLocation!);
+            }
         }
 
         /// <summary>
@@ -113,12 +131,27 @@ namespace WaterBot.Framework
                 return;
             }
 
+            // Bug 4 fix: verify player actually reached the stand point.
+            // PathFindController fires the callback even when the destination
+            // is unreachable, so we skip the tile rather than watering in-place.
+            Point stand = this.order[this.currentTile].getStand();
+            Point playerTile = Game1.player.TilePoint;
+            if (Math.Abs(playerTile.X - stand.X) + Math.Abs(playerTile.Y - stand.Y) > 1)
+            {
+                this.navigate();
+                return;
+            }
+
             Point point = this.order[this.currentTile].Pop();
 
             if (point.X != -1)
             {
                 this.water(point);
-                Task.Delay(800).ContinueWith(o => { this.startWatering(c, location); });
+                // Bug 1 fix: schedule next watering action via main-thread tick counter
+                // instead of Task.Delay (which runs on a thread-pool thread).
+                this.pendingCharacter = c;
+                this.pendingLocation = location;
+                this.waitUntilTick = Game1.ticks + 48; // ~800ms at 60fps
             }
             else
             {
@@ -308,6 +341,7 @@ namespace WaterBot.Framework
         public void stop()
         {
             this.active = false;
+            this.waitUntilTick = 0;
             Game1.player.controller = null;
             this.displayMessage(this.helper.Translation.Get("process.interrupt"), 1);
         }
@@ -319,6 +353,7 @@ namespace WaterBot.Framework
         {
             this.console?.Invoke("Bot interrupted by lack of stamina. Ending process.");
             this.active = false;
+            this.waitUntilTick = 0;
             Game1.player.controller = null;
             this.displayMessage(this.helper.Translation.Get("process.exhausted"), 3);
         }
