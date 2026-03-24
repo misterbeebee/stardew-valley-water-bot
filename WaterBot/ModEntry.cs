@@ -122,6 +122,7 @@ namespace WaterBot
             public bool RefillOnFinish { get; set; } = false;
             public int RefillIfLower { get; set; } = 95;
             public bool RedoPathOnRefill { get; set; } = false;
+            public bool Debug { get; set; } = false;
         }
 
         private void SetUpConfigMenu()
@@ -168,6 +169,13 @@ namespace WaterBot
                 tooltip: () => this.Helper.Translation.Get("config.redo_path_on_refill.desc"),
                 getValue: () => config.RedoPathOnRefill,
                 setValue: (bool b) => config.RedoPathOnRefill = b
+            );
+            configMenu.AddBoolOption(
+                mod: ModManifest,
+                name: () => "Debug Mode",
+                tooltip: () => "Log detailed pathfinding and state changes to the console.",
+                getValue: () => config.Debug,
+                setValue: (bool b) => config.Debug = b
             );
         }
     }

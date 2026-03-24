@@ -9,9 +9,11 @@ Four root-cause bugs were identified and fixed that caused the bot to skip crops
 **Files:** `WaterBot/ModEntry.cs`, `WaterBot/Framework/WaterBotController.cs`
 
 ### Problem
+
 `Task.Delay(800).ContinueWith(o => { this.startWatering(...); })` scheduled the next watering action on a .NET thread-pool thread. Stardew Valley and SMAPI are single-threaded; accessing game state from a background thread caused corruption, duplicate triggers, and skipped tiles.
 
 ### Fix
+
 Removed `Task.Delay`. A tick-based state machine now drives the delay on the main thread via SMAPI's `GameLoop.UpdateTicked` event:
 
 - `ModEntry.cs` subscribes to `UpdateTicked` and forwards each tick to `bot.onUpdateTick()`.
@@ -26,15 +28,18 @@ Removed `Task.Delay`. A tick-based state machine now drives the delay on the mai
 **File:** `WaterBot/Framework/Map.cs` — `findFillPath()`
 
 ### Problem
+
 When a crop tile was impassable (e.g. a trellis crop), the code searched for a walkable adjacent neighbor to stand on. However, `bestOption` was initialised to the **blocked tile itself** and `score = 0`. Because adjacent tile scores were compared with `>` (strict), a neighbor with score 0 would not replace the default. If no neighbor scored above 0, the blocked tile remained the stand destination. `PathFindController` would immediately fire its callback (destination unreachable) from wherever the player was standing, causing watering at wrong positions or silent skips.
 
 ### Fix
+
 ```diff
 - int score = 0;
 - Tile bestOption = this.map[current.y][current.x];
 + int score = -1;
 + Tile? bestOption = null;
 ```
+
 Also added `score = neighborScore` inside the winning branch so the score updates correctly. The existing `if (bestOption == null) { continue; }` guard now correctly skips tiles with no reachable stand.
 
 ---
@@ -44,21 +49,30 @@ Also added `score = neighborScore` inside the winning branch so the score update
 **File:** `WaterBot/Framework/Map.cs` — `findFillPath()`
 
 ### Problem
+
 `findFillPath` uses a depth-first search to build the watering order. The cardinal-directions loop correctly did two things for each neighbor: marked it `watered = true` and pushed it onto the DFS stack. The **diagonals loop** marked neighbors `watered = true` but **never pushed them onto the stack**. A diagonally-adjacent tile was permanently locked out of traversal — tiles reachable only through it were either skipped or visited out-of-order by the outer `keepGoing` pass.
 
 ### Fix
-Added the missing stack push inside the diagonals loop:
+
+Modified the diagonals loop to **only** push unvisited in-group neighbors onto the DFS stack. We specifically removed the `pushExecuteOn` call for diagonal neighbors because the watering can in Stardew Valley cannot hit diagonal tiles. By only pushing to the stack, the bot is forced to visit those tiles separately and water them from a proper cardinal-adjacent position.
 
 ```diff
-  if (neighbor.waterable && !neighbor.watered)
+  foreach (var direction in this.diagonals)
   {
-      actionable.pushExecuteOn(neighbor.getPoint());
-      neighbor.watered = true;
+      if (direction.IsInBounds(...))
+      {
+          Tile neighbor = ...;
+-         if (neighbor.waterable && !neighbor.watered)
+-         {
+-             actionable.pushExecuteOn(neighbor.getPoint());
+-             neighbor.watered = true;
+-         }
+          if (!neighbor.visited && group.Contains(neighbor))
+          {
+              stack.Add(neighbor);
+          }
+      }
   }
-+ if (!neighbor.visited && group.Contains(neighbor))
-+ {
-+     stack.Add(neighbor);
-+ }
 ```
 
 ---
@@ -68,9 +82,11 @@ Added the missing stack push inside the diagonals loop:
 **File:** `WaterBot/Framework/WaterBotController.cs` — `startWatering()`
 
 ### Problem
+
 `PathFindController` fires its "arrived" callback both on successful arrival **and** when it gives up on an unreachable destination. `startWatering` never verified that the player actually reached the intended stand point, so it would water from wherever the player happened to be — producing wrong facing direction, mis-targeted watering, and silent skips.
 
 ### Fix
+
 Added a Manhattan distance check at the start of `startWatering`. If the player is more than 1 tile away from the intended stand point, the actionable tile is skipped cleanly by calling `navigate()`:
 
 ```csharp
@@ -85,17 +101,32 @@ if (Math.Abs(playerTile.X - stand.X) + Math.Abs(playerTile.Y - stand.Y) > 1)
 
 ---
 
-## Bonus — Pending Timer Cleared on Interrupt
+## Bonus 1 — Pending Timer Cleared on Interrupt
 
 `stop()` and `exhausted()` now set `waitUntilTick = 0` so that a pending tick delay cannot fire after the bot has been stopped.
 
 ---
 
+## Bonus 2 — Ground-Truth Syncing
+
+**File:** `WaterBot/Framework/WaterBotController.cs`
+
+### Problem
+
+Relying entirely on pre-planned predictions for which tiles are watered can lead to de-sync if a tile is watered by accident (e.g., an upgraded watering can hitting a larger area than expected) or if the game engine's state differs from the bot's internal model.
+
+### Fix
+
+Added `syncWateredState()` which is called after every `water()` action. This method reads `HoeDirt.state.Value` directly from the game's location data. This ensures the bot's internal `watered` flags always match the actual state of the farm, preventing double-watering and ensuring compatibility with upgraded tools.
+
+---
+
 ## Summary
 
-| # | Root Cause | File(s) | Impact |
-|---|---|---|---|
-| 1 | `Task.Delay` on thread-pool thread | `ModEntry.cs`, `WaterBotController.cs` | Double-watering, skips, crashes |
-| 2 | `bestOption` initialised to blocked tile | `Map.cs` | Bot stands on impassable tile, skips groups |
-| 3 | Diagonal DFS neighbors not stacked | `Map.cs` | Diagonal crops silently skipped |
-| 4 | No position check after `PathFindController` | `WaterBotController.cs` | Waters from wrong tile on unreachable stands |
+| #   | Root Cause                                   | File(s)                                | Impact                                        |
+| --- | -------------------------------------------- | -------------------------------------- | --------------------------------------------- |
+| 1   | `Task.Delay` on thread-pool thread           | `ModEntry.cs`, `WaterBotController.cs` | Double-watering, skips, crashes               |
+| 2   | `bestOption` initialised to blocked tile     | `Map.cs`                               | Bot stands on impassable tile, skips groups   |
+| 3   | Diagonal DFS neighbors not stacked           | `Map.cs`                               | Diagonal crops skipped or watered incorrectly |
+| 4   | No position check after `PathFindController` | `WaterBotController.cs`                | Waters from wrong tile on unreachable stands  |
+| 5   | Predicted vs Actual state de-sync            | `WaterBotController.cs`                | Potential double-watering or logic errors     |

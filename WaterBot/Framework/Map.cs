@@ -561,6 +561,7 @@ namespace WaterBot.Framework
         /// <param name="console">Function for printing to debug console.</param>
         public int[,] generateCostMatrix(console console, List<Group> groupings)
         {
+            console($"Generating cost matrix for {groupings.Count} groups...");
             foreach (Group group in groupings)
             {
                 if (group.Count() == 0)
@@ -782,117 +783,138 @@ namespace WaterBot.Framework
                         // Start a new action
                         ActionableTile actionable = new ActionableTile(ActionableTile.Action.Water);
                         current.visited = true;
+                        if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Map] Visiting tile ({current.x}, {current.y})");
 
+                        // 1. Determine Stand Point
+                        // Default to standing on the crop itself.
+                        // For Trellises, we MUST stand on a neighbor.
                         if (current.block)
                         {
-                            // Bug 2 fix: initialize to null/-1 so no blocked tile can
-                            // win by default (previously defaulted to the blocked tile itself).
-                            int score = -1;
                             Tile? bestOption = null;
-
-                            // If you can stand on adjacents, do it.
+                            int bestScore = -1;
                             foreach (var direction in this.directions.Concat(this.diagonals))
                             {
                                 if (direction.IsInBounds(current.y + direction.Y, current.x + direction.X))
                                 {
                                     Tile neighbor = this.map[current.y + direction.Y][current.x + direction.X];
-                                    if (neighbor.block)
-                                    {
-                                        continue;
-                                    }
-
+                                    if (neighbor.block) continue;
+                                    
                                     int neighborScore = 0;
+                                    if (group.Contains(neighbor)) neighborScore += 10;
+                                    if (neighbor.waterable && !neighbor.watered && !neighbor.isPlanned) neighborScore += 5;
 
-                                    if (group.Contains(neighbor)) neighborScore += 5;
-                                    if (neighbor.waterable) neighborScore += 5;
-                                    if (!neighbor.watered) neighborScore += 5;
-                                    if (!neighbor.visited) neighborScore += 5;
-
-                                    if (neighborScore > score)
+                                    if (neighborScore > bestScore)
                                     {
-                                        score = neighborScore;
+                                        bestScore = neighborScore;
                                         bestOption = neighbor;
                                     }
                                 }
                             }
-
                             if (bestOption == null)
                             {
+                                if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Map]   CRITICAL: No valid stand point for Trellis ({current.x}, {current.y})!");
                                 continue;
                             }
-
-                            // Set possible standing point.
                             actionable.setStand(bestOption.getPoint());
                         }
                         else
                         {
-                            // Set this as standing position
                             actionable.setStand(current.getPoint());
                         }
 
-                        // Water here
-                        if (current.getPoint() == actionable.getStand())
-                        {
-                            actionable.pushExecuteOn(current.getPoint());
-                            current.watered = true;
-                        }
-                        else if (this.map[actionable.getStand().Y][actionable.getStand().X].waterable && !this.map[actionable.getStand().Y][actionable.getStand().X].watered)
-                        {
-                            actionable.pushExecuteOn(actionable.getStand());
-                            this.map[actionable.getStand().Y][actionable.getStand().X].watered = true;
-                        }
+                        // IMPORTANT: Mark THIS crop as planned immediately so neighbors 
+                        // don't try to double-water it vertically.
+                        bool alreadyPlanned = current.isPlanned;
+                        current.isPlanned = true;
 
-                        // If you can water adjacents, do it.
+                        // 2. Planning Reaches (Cardinal Neighbors)
+                        Point stand = actionable.getStand();
                         foreach (var direction in this.directions)
                         {
-                            if (direction.IsInBounds(actionable.getStand().Y + direction.Y, actionable.getStand().X + direction.X))
+                            if (direction.IsInBounds(stand.Y + direction.Y, stand.X + direction.X))
                             {
-                                Tile neighbor = this.map[actionable.getStand().Y + direction.Y][actionable.getStand().X + direction.X];
-                                if (neighbor.waterable && !neighbor.watered)
+                                Tile neighbor = this.map[stand.Y + direction.Y][stand.X + direction.X];
+                                if (neighbor.waterable && !neighbor.isPlanned && !neighbor.watered)
                                 {
                                     actionable.pushExecuteOn(neighbor.getPoint());
-                                    neighbor.watered = true;
-                                }
-                                if (!neighbor.visited && group.Contains(neighbor))
-                                {
-                                    stack.Add(neighbor);
+                                    neighbor.isPlanned = true;
+                                    if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Map]   Plan: Reach neighbor ({neighbor.x}, {neighbor.y}) from ({stand.X}, {stand.Y})");
                                 }
                             }
                         }
 
-                        // If you can water diagonals, do it.
-                        foreach (var direction in this.diagonals)
+                        // 3. Center/Trellis Fallback
+                        // We must water the "Target" crop itself.
+                        // If it's a Trellis, we water it from our side-stand point.
+                        // If it's a regular crop, we water it underfoot (Center) ONLY if it wasn't
+                        // already covered by a previous stop's neighboring reach.
+                        if (current.waterable && !current.watered && !alreadyPlanned)
                         {
-                            if (direction.IsInBounds(actionable.getStand().Y + direction.Y, actionable.getStand().X + direction.X))
+                            // For regular crops, we are standing on them.
+                            // For Trellises, we are standing at bestOption. 
+                            // Either way, 'current' is a cardinal neighbor (or center) and is reachable.
+                            actionable.pushExecuteOn(current.getPoint());
+                            if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Map]   Plan: Target water for ({current.x}, {current.y})");
+                        }
+
+
+                        // Collect neighbors for DFS pathfinding
+                        List<Tile> neighbors = new List<Tile>();
+                        foreach (var direction in this.directions.Concat(this.diagonals))
+                        {
+                            if (direction.IsInBounds(current.y + direction.Y, current.x + direction.X))
                             {
-                                Tile neighbor = this.map[actionable.getStand().Y + direction.Y][actionable.getStand().X + direction.X];
-                                if (neighbor.waterable && !neighbor.watered)
-                                {
-                                    actionable.pushExecuteOn(neighbor.getPoint());
-                                    neighbor.watered = true;
-                                }
-                                // Bug 3 fix: push diagonal neighbors onto the DFS stack
-                                // so the traversal can reach tiles beyond them.
-                                // Previously only the cardinal-direction loop did this.
+                                Tile neighbor = this.map[current.y + direction.Y][current.x + direction.X];
                                 if (!neighbor.visited && group.Contains(neighbor))
                                 {
-                                    stack.Add(neighbor);
+                                    neighbors.Add(neighbor);
                                 }
                             }
+                        }
+
+                        // Sorting neighbors for a logical row-by-row "snake" pattern:
+                        // 1. Prioritize neighbors on the same row (Y).
+                        // 2. Then neighbors on the row below (Y+1).
+                        // 3. Then everyone else.
+                        // Since it's a stack (LIFO), we sort in ASCENDING order and push in that order
+                        // so the LAST element (the best one) is popped FIRST.
+                        neighbors.Sort((a, b) => {
+                            int aPriority = (a.y == actionable.getStand().Y) ? 0 : (a.y == actionable.getStand().Y + 1 ? 1 : 2);
+                            int bPriority = (b.y == actionable.getStand().Y) ? 0 : (b.y == actionable.getStand().Y + 1 ? 1 : 2);
+                            if (aPriority != bPriority) return aPriority.CompareTo(bPriority);
+                            return Math.Abs(a.x - actionable.getStand().X).CompareTo(Math.Abs(b.x - actionable.getStand().X));
+                        });
+
+                        neighbors.Reverse(); // Reverse so the best neighbor is at the END of the list.
+                        foreach (var neighbor in neighbors)
+                        {
+                            stack.Add(neighbor);
+                            if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Map]   Adding neighbor ({neighbor.x}, {neighbor.y}) to stack.");
                         }
 
                         path.Add(actionable);
                     }
                 }
 
+                keepGoing = false;
+                Tile? nextStart = null;
+                // Favor starting on a "middle" row (Y = 1, 4, 7...) to maximize 3-row coverage.
                 foreach (Tile tile in group.getList())
                 {
                     if (!tile.visited)
                     {
-                        stack.Add(tile);
-                        keepGoing = true;
-                        break;
+                        if (nextStart == null || (tile.y % 3 == 1 && nextStart.y % 3 != 1))
+                        {
+                            nextStart = tile;
+                        }
                     }
+                }
+
+                if (nextStart != null)
+                {
+                    stack.Add(nextStart);
+                    if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Map] Starting new segment at ({nextStart.x}, {nextStart.y})");
+                    keepGoing = true;
                 }
             } while (keepGoing);
 

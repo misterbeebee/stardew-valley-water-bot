@@ -1,4 +1,20 @@
+# v1.4.2
+
+### Added
+- **Stardew-Correct 3-Row Sweep**: The bot now waters three rows as it moves, using a proactive "reaching" pattern. It avoids watering the tile underfoot (which is unreliable in Stardew) and instead reaches forward, up, and down.
+- **Row-by-Row Prioritization**: Fixed "scrambling" by ensuring the bot prioritizes finishing a row before moving to the next.
+- **Improved Start Row**: The bot now intelligently picks the best row to start a group to maximize its 3-row coverage.
+- **Detailed Trace Logging**: Added logs to help diagnose any potential hangs or bottlenecks in large farms.
+
+### Fixed
+- **Double-Watering Fix**: Prevented redundant tool animations by verifying the tile's watered state before each action.
+- **Threading Race Condition**: Replaced `Task.Delay` with a main-thread tick-based state machine for 100% stability.
+- **Trellis Handling**: Fixed a bug where the bot would try to stand on impassable trellis tiles.
+- **Diagonal Crop Fix**: Ensured all diagonal neighbors are correctly processed in the pathfinding traversal.
+
+
 # v1.2.1
+
 
 🐛 Bug Fix
 

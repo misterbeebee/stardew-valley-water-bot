@@ -1,6 +1,7 @@
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.TerrainFeatures;
 using StardewValley.Tools;
 using StardewValley.Pathfinding;
 
@@ -57,14 +58,17 @@ namespace WaterBot.Framework
         {
             this.console = console;
             this.active = true;
+            this.console?.Invoke("Bot started. Loading map...");
 
             // Load map data
             this.map.loadMap();
+            this.console?.Invoke($"Map loaded. Found {this.map.waterableTiles.Count} tiles needing water.");
 
             if (!this.active) return;
 
             // Group waterable tiles
             List<Group> groupings;
+            this.console?.Invoke("Grouping tiles...");
             if (WaterBot.config.UseSmallGrouping)
             {
                 groupings = this.map.getMinimalCoverGroups();
@@ -74,12 +78,15 @@ namespace WaterBot.Framework
                 groupings = this.map.findGroupings(this.console);
             }
 
+            this.console?.Invoke($"Grouped into {groupings.Count} groups. Finding group path...");
+
             if (!this.active) return;
 
             this.currentGroup = 0;
             this.currentTile = 0;
 
-            this.path = this.map.findGroupPath(this.console, groupings);
+            this.path = this.map.findGroupPath(this.console!, groupings);
+            this.console?.Invoke($"Found path through {this.path.Count} groups.");
 
             if (path.Count == 0)
             {
@@ -146,7 +153,22 @@ namespace WaterBot.Framework
 
             if (point.X != -1)
             {
-                this.water(point);
+                // Fix for double-watering: check if the tile was already watered
+                // (e.g. by a previous area-of-effect stop) before tool use.
+                if (!this.map.map[point.Y][point.X].watered)
+                {
+                    if (global::WaterBot.WaterBot.config?.Debug == true) global::BotFramework.Logger.Log($"[Bot] Watering tile ({point.X}, {point.Y})");
+                    this.water(point);
+                    // Sync the bot's tile model to actual game state so pre-planned
+                    // predictions (e.g. for upgraded watering cans) can't cause skips
+                    // or double-waterings.
+                    this.syncWateredState();
+                }
+                else if (global::WaterBot.WaterBot.config?.Debug == true)
+                {
+                    global::BotFramework.Logger.Log($"[Bot] Skipping tile ({point.X}, {point.Y}) - already wet.");
+                }
+                
                 // Bug 1 fix: schedule next watering action via main-thread tick counter
                 // instead of Task.Delay (which runs on a thread-pool thread).
                 this.pendingCharacter = c;
@@ -181,6 +203,10 @@ namespace WaterBot.Framework
             else if (Game1.player.TilePoint.X < tile.X)
             {
                 Game1.player.FacingDirection = 1;
+            }
+            else // Same tile (underfoot) - force facing DOWN for reliability
+            {
+                Game1.player.FacingDirection = 2;
             }
 
             if (Game1.player.isEmoteAnimating)
@@ -274,6 +300,31 @@ namespace WaterBot.Framework
         public void navigateNoUpdate()
         {
             Game1.player.controller = new PathFindController(Game1.player, Game1.currentLocation, this.order[this.currentTile].getStand(), 2, this.startWatering);
+        }
+
+        /// <summary>
+        /// Syncs the bot's internal tile model to the actual game state.
+        /// Reads HoeDirt.state directly so any tiles already watered by the game
+        /// (including area-of-effect from upgraded cans) are correctly marked.
+        /// </summary>
+        private void syncWateredState()
+        {
+            foreach (var row in this.map.map)
+                foreach (var tile in row)
+                    if (tile.waterable)
+                    {
+                        var index = new Vector2(tile.x, tile.y);
+                        if (Game1.currentLocation.terrainFeatures.TryGetValue(index, out TerrainFeature feature)
+                            && feature is HoeDirt hoeDirt)
+                        {
+                            bool newState = hoeDirt.state.Value != 0;
+                            if (global::WaterBot.WaterBot.config?.Debug == true && tile.watered != newState)
+                            {
+                                global::BotFramework.Logger.Log($"[Sync] Tile ({tile.x}, {tile.y}) state: {tile.watered} -> {newState}");
+                            }
+                            tile.watered = newState;
+                        }
+                    }
         }
 
         public void refillWater()

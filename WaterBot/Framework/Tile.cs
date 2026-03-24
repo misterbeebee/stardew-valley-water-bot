@@ -1,4 +1,4 @@
-﻿using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework;
 using System;
 
 namespace WaterBot.Framework
@@ -17,6 +17,7 @@ namespace WaterBot.Framework
         public bool watered;
         public bool waterCheck;
         public bool walkableCheck;
+        public bool isPlanned;
 
         public Tile(int x, int y, bool block, bool water, bool waterable)
         {
@@ -29,6 +30,7 @@ namespace WaterBot.Framework
             this.watered = false;
             this.waterCheck = false;
             this.walkableCheck = false;
+            this.isPlanned = false;
         }
 
         /// <summary>
@@ -57,7 +59,7 @@ namespace WaterBot.Framework
         public void reset()
         {
             this.visited = false;
-            this.watered = false;
+            this.isPlanned = false;
         }
 
         /// <summary>
